@@ -45,7 +45,6 @@ logs/
 results/cluster/
 *.sbatch
 
-paper/
 
 slides/
 
