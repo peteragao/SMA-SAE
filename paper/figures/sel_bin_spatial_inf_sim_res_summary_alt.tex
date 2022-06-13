@@ -1,0 +1,21 @@
+
+\begin{tabular}{r|l|rrrr|rrrr}
+	\toprule
+	& & \multicolumn{4}{c|}{\textit{Reduced models}} & \multicolumn{4}{c}{\textit{Full models}}\\
+	& \textbf{Method} & \textbf{RMSE} & \textbf{MAE} & \textbf{90\% Cov.} & \textbf{MIL}& \textbf{RMSE} & \textbf{MAE} & \textbf{90\% Cov.}& \textbf{MIL}\\\cline{2-10}
+	&Direct (Hájek) & 4.44 & 3.28 & 86 & 13.99&&&&\\
+	&MA & 3.70 & 2.81 & 87 & 11.82& 3.17 & 2.41 & 87 & 9.68\\
+	\midrule
+	\multirow{5}{*}{\textit{Non-spatial}}&SH& 4.84 & 3.44 & 89 & 14.66&&&&\\
+	&SMA & 3.71 & 2.79 & 87 & 12.27& 3.18 & 2.41 & 87 & 9.92\\
+	&Binomial & 4.22 & 3.11 & 75 & 8.24& 2.68 & 2.02 & 88 & 7.99\\
+	&Betabinomial & 4.13 & 3.05 & 83 & 10.10 & 2.69 & 2.04 & 89 & 8.43\\
+	&LoNo-Binomial & 4.42 & 3.23 & 81 & 9.95& 4.42 & 3.23 & 81 & 9.95\\
+	\midrule
+	\multirow{5}{*}{\textit{Spatial}}&SH  & 4.24 & 3.13 & 91 & 13.40&&&&\\
+	&SMA & 3.47 & 2.65 & 87 & 11.49& 3.03 & 2.28 & 88 & 9.47\\
+	&Binomial & 4.14 & 3.02 & 76 & 8.06& 2.62 & 1.96 & 88 & 7.76\\
+	&Betabinomial & 3.96 & 2.88 & 85 & 9.84& 2.62 & 1.96 & 90 & 8.21\\
+	&LoNo-Binomial & 4.38 & 3.18 & 81 & 9.72& 2.62 & 1.96 & 89 & 8.10\\
+	\bottomrule
+\end{tabular}
