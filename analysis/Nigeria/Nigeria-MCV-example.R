@@ -1,7 +1,6 @@
 #### 0 LIBRARIES AND PATHS ####################################################
 library(rgdal)
-#library(readstata13)
-library(geosphere)
+library(readstata13)
 library(spdep)
 library(survey)
 library(INLA)
@@ -11,7 +10,6 @@ library(raster)
 library(ggplot2)
 library(sf)
 library(patchwork)
-library(tiff)
 # Set working directory (not necessary if using .Rproj)
 home_dir <- '~/'
 if (!("Dropbox" %in% list.files("~"))) {
@@ -36,14 +34,11 @@ dhs_file <- "dhsStata/NGKR7BDT/NGKR7BFL.DTA"
 # survey GPS
 dhsFlat_file <- "NGGE7BFL"
 
-country_dir <- paste0("../", country, "/")
+country_dir <- paste0("data/", country, "/")
 poly_path <- paste0(country_dir, "shapeFiles_gadm")
 res_dir <- "./results"
 proj_data_dir <-  paste0("./data/" , country, "/", sep="")
 dir.create(file.path(proj_data_dir), showWarnings = FALSE)
-# link to the main dropbox folder for population rasters 
-pop_raw_dir <- paste0(country_dir, 'Population/')
-cov_raw_dir <- paste0(country_dir, 'covariates/')
 
 #### 1 LOAD DATA ##############################################################
  
@@ -200,33 +195,29 @@ if (TRUE) {
 }
 #### 1.2 POPULATION DATA #######################################################
 if (F) {
-  source("./analysis/Nigeria/process-pop-cov.R")
+  source("./analysis/Nigeria/process-population-covariates.R")
   load_pop_data(poly_adm1, poly_adm2)
 } 
-# adm1_pix_tbl <- readRDS(paste0("../data-SMA-SAE/Nigeria/nga_pix_tbl.rds"))
-adm1_pop_totals <- readRDS(paste0("../data-SMA-SAE/Nigeria/nga_pop_totals.rds"))
+adm1_pop_totals <- readRDS(paste0("data/Nigeria/nga_pop_totals.rds"))
 
-#adm1_pix_tbl <- 
-#  readRDS(paste0("../data-SMA-SAE/Nigeria/nga_pix_tbl_admin1_1.rds"))
 #### 1.3 COVARIATE DATA ########################################################
-
 # access raster
 access <- 
-  raster("../data-SMA-SAE/Nigeria/2015_accessibility_to_cities_v1.0.tif")
+  raster("data/Nigeria/2015_accessibility_to_cities_v1.0.tif")
 # poverty raster
 poverty <- 
-  raster("../data-SMA-SAE/Nigeria/nga10povcons200.tif")
+  raster("data/Nigeria/nga10povcons200.tif")
 
 #### 1.3.1 cluster covariates
 svy_dat_coords <- st_as_sf(svy_dat[, c("lon", "lat")], coords = c(1:2))
 svy_dat$access <- extract(access, svy_dat_coords)
 svy_dat$l1a <- log(1 + svy_dat$access)
 svy_dat$poverty <- extract(poverty, svy_dat_coords)
-svy_dat$poverty <- ifelse(is.na(svy_dat$poverty), mean(svy_dat$poverty, na.rm = T), svy_dat$poverty)
+svy_dat$poverty <- 
+  ifelse(is.na(svy_dat$poverty), mean(svy_dat$poverty, na.rm = T), svy_dat$poverty)
 svy_dat$urban <- as.factor(svy_dat$urban)
 #### 2 DESIGN-BASED METHODS ####################################################
 source("analysis/models.R")
-
 if (F) {
   #### 2.1.1 Hajek ####
   sample_des <- svydesign(id = ~cluster + hshold,
@@ -240,7 +231,7 @@ if (F) {
   greg_est_list <- list()
   for (i in 1:37) {
     pop_dat_i <- 
-      readRDS(paste0("../data-SMA-SAE/Nigeria/nga_pix_tbl_admin1_", i, ".rds"))
+      readRDS(paste0("data/Nigeria/nga_pix_tbl_admin1_", i, ".rds"))
     pop_dat_i$l1a = log(1 + pop_dat_i$access)
     pop_dat_i <- filter(pop_dat_i, !is.na(l1a) & !is.na(poverty))
     pop_dat_i$admin1_char <-
@@ -257,7 +248,7 @@ if (F) {
   igreg_est_list <- list()
   for (i in 1:37) {
     pop_dat_i <- 
-      readRDS(paste0("../data-SMA-SAE/Nigeria/nga_pix_tbl_admin1_", i, ".rds"))
+      readRDS(paste0("data/Nigeria/nga_pix_tbl_admin1_", i, ".rds"))
     pop_dat_i$l1a = log(1 + pop_dat_i$access)
     pop_dat_i <- filter(pop_dat_i, !is.na(l1a) & !is.na(poverty))
     pop_dat_i$admin1_char <-
@@ -299,7 +290,7 @@ args = commandArgs(TRUE)
 i = as.numeric(args[1])
 if (!file.exists(paste0(mcv_res_dir, "iid_bin_ulm_est_admin1_", i, ".rds"))) {
   pop_dat_i <- 
-    readRDS(paste0("../data-SMA-SAE/Nigeria/nga_pix_tbl_admin1_", i, ".rds"))
+    readRDS(paste0("data/Nigeria/nga_pix_tbl_admin1_", i, ".rds"))
   pop_dat_i$l1a = log(1 + pop_dat_i$access)
   pop_dat_i <- filter(pop_dat_i, !is.na(l1a) & !is.na(poverty))
   pop_dat_i$admin1_char <-
@@ -319,7 +310,7 @@ if (!file.exists(paste0(mcv_res_dir, "iid_bin_ulm_est_admin1_", i, ".rds"))) {
 }
 if (!file.exists(paste0(mcv_res_dir, "bym_bin_ulm_est_admin1_", i, ".rds"))) {
   pop_dat_i <- 
-    readRDS(paste0("../data-SMA-SAE/Nigeria/nga_pix_tbl_admin1_", i, ".rds"))
+    readRDS(paste0("data/Nigeria/nga_pix_tbl_admin1_", i, ".rds"))
   pop_dat_i$l1a = log(1 + pop_dat_i$access)
   pop_dat_i <- filter(pop_dat_i, !is.na(l1a) & !is.na(poverty))
   pop_dat_i$admin1_char <-
@@ -378,7 +369,7 @@ if (F) {
   i = as.numeric(args[1])
   if (!file.exists(paste0(mcv_res_dir, "iid_bbin_ulm_est_admin1_", i, ".rds"))) {
     pop_dat_i <- 
-      readRDS(paste0("../data-SMA-SAE/Nigeria/nga_pix_tbl_admin1_", i, ".rds"))
+      readRDS(paste0("data/Nigeria/nga_pix_tbl_admin1_", i, ".rds"))
     pop_dat_i$l1a = log(1 + pop_dat_i$access)
     pop_dat_i <- filter(pop_dat_i, !is.na(l1a) & !is.na(poverty))
     pop_dat_i$admin1_char <-
@@ -398,7 +389,7 @@ if (F) {
   }
   if (!file.exists(paste0(mcv_res_dir, "bym_bbin_ulm_est_admin1_", i, ".rds"))) {
     pop_dat_i <- 
-      readRDS(paste0("../data-SMA-SAE/Nigeria/nga_pix_tbl_admin1_", i, ".rds"))
+      readRDS(paste0("data/Nigeria/nga_pix_tbl_admin1_", i, ".rds"))
     pop_dat_i$l1a = log(1 + pop_dat_i$access)
     pop_dat_i <- filter(pop_dat_i, !is.na(l1a) & !is.na(poverty))
     pop_dat_i$admin1_char <-
@@ -443,11 +434,6 @@ if (F) {
   
   bym2_sgreg_est <- get_bym2_sdir(greg_est, admin1_mat)
   bym2_sgreg_logit_est <- get_bym2_sdir_logit(greg_est, admin1_mat)
-  iid_sigreg_logit_est <- get_iid_sdir_logit(igreg_est)
-  iid_sigreg_est <- get_iid_sdir(igreg_est)
-  
-  bym2_sigreg_est <- get_bym2_sdir(igreg_est, admin1_mat)
-  bym2_sigreg_logit_est <- get_bym2_sdir_logit(igreg_est, admin1_mat)
   save(direct_est,
        greg_est, 
        iid_sdir_est,
@@ -458,10 +444,6 @@ if (F) {
        iid_sgreg_logit_est,
        bym2_sgreg_est,
        bym2_sgreg_logit_est,
-       iid_sigreg_est,
-       iid_sigreg_logit_est,
-       bym2_sigreg_est,
-       bym2_sigreg_logit_est, 
        iid_bin_ulm_est,
        bym_bin_ulm_est,
        iid_bbin_ulm_est,
@@ -480,7 +462,6 @@ nga_map <- ggplot(data = st_as_sf(poly_adm2)) +
                mutate(urban = as.factor(ifelse(urban == "U", "Urban", "Rural"))),
              aes(x = lon, y = lat, color = urban),
              shape = 3, alpha = 1, size = .55) +
-  #scale_fill_manual(values = sample(colorRampPalette(c("#008753", "#FFFFFF"))(37))) + 
   scale_color_manual(values = c("mediumblue", "gold"), name = NULL) + 
   guides(colour = guide_legend(override.aes = list(size = 4, stroke = 2))) +
   theme_bw() + guides(fill="none") +
@@ -496,8 +477,6 @@ nga_map <- ggplot(data = st_as_sf(poly_adm2)) +
   xlab("") + ylab("")
 ggsave(paste0("paper/figures/nga_map.pdf"), nga_map,
        width = 7, height = 7)
-# ggsave(paste0("paper/figures/nga_map.tiff"),
-#        nga_map, dpi = 200, width = 7, height = 7)
 #### 4.2 MAPS OF ADMIN-1 ESTIMATES ##############################################
 load(paste0(mcv_res_dir, "adm1_est.RData"))
 print("loaded estimates")
@@ -517,14 +496,6 @@ adm1_est <- bind_rows(direct_est %>%
                         mutate(method = "Spatial SH alt."),
                       bym2_sdir_logit_est  %>%
                         mutate(method = "Spatial SH"),
-                      # iid_sigreg_est %>%
-                      #   mutate(method = "SGREG int alt"),
-                      # iid_sigreg_logit_est %>%
-                      #   mutate(method = "SGREG int"),
-                      # bym2_sigreg_est %>%
-                      #   mutate(method = "Spatial SGREG int alt"),
-                      # bym2_sigreg_logit_est  %>%
-                      #   mutate(method = "Spatial SGREG int"),
                       iid_sgreg_est %>%
                         mutate(method = "SGREG alt."),
                       iid_sgreg_logit_est  %>%
@@ -563,8 +534,6 @@ all_ests <- ggplot(adm1_maps, aes(fill = median)) + geom_sf(lwd = 0) +
   xlab("") + ylab("")
 ggsave(paste0("paper/figures/all_adm1_mcv_est_maps.pdf"),
        all_ests, width = 8, height = 7)
-# ggsave(paste0("paper/figures/all_adm1_mcv_est_maps.tiff"),
-#        all_ests, dpi = 200, width = 8, height = 7)
 
 sel_ests <- ggplot(sel_maps,
                    aes(fill = median)) + geom_sf(lwd = 0) + 
@@ -581,8 +550,6 @@ sel_ests <- ggplot(sel_maps,
   xlab("") + ylab("")
 ggsave(paste0("paper/figures/sel_adm1_mcv_est_maps.pdf"),
        sel_ests, width = 6, height = 7)
-# ggsave(paste0("paper/figures/sel_adm1_mcv_est_maps.tiff"),
-#        sel_ests, dpi = 200, width = 6, height = 7)
 
 #### 4.3 MAPS OF ADMIN-1 CI LENGTHS ############################################
 
@@ -602,8 +569,6 @@ all_lengths <- ggplot(adm1_maps, aes(fill = upper - lower)) +
   xlab("") + ylab("")
 ggsave(paste0("paper/figures/all_adm1_mcv_len_maps.pdf"), 
        all_lengths, width = 8, height = 7)
-# ggsave(paste0("paper/figures/all_adm1_mcv_len_maps.tiff"),
-#        all_lengths, dpi = 200, width = 8, height = 7)
 sel_lengths <- ggplot(sel_maps,
                    aes(fill = upper - lower)) + geom_sf(lwd = 0) + 
   scale_fill_viridis_c(direction = -1, option = "magma",
@@ -620,17 +585,12 @@ sel_lengths <- ggplot(sel_maps,
   xlab("") + ylab("")
 ggsave(paste0("paper/figures/sel_adm1_mcv_len_maps.pdf"), 
        sel_lengths, width = 6, height = 7)
-# ggsave(paste0("paper/figures/sel_adm1_mcv_len_maps.tiff"),
-#        sel_lengths, dpi = 200, width = 6, height = 7)
-
 comb_maps <- sel_ests + labs(caption = "(a)") + 
   theme(plot.caption = element_text(hjust = .5 , size = 15)) +
   sel_lengths + labs(caption = "(b)") + 
   theme(plot.caption = element_text(hjust = .5 , size = 15))
 ggsave(paste0("paper/figures/sel_adm1_mcv_maps.pdf"), 
        comb_maps, width = 12, height = 7)
-# ggsave(paste0("paper/figures/sel_adm1_mcv_maps.tiff"),
-#        comb_maps, dpi = 200, width = 12, height = 7)
 
 #### 4.4 MAPS OF ADMIN-1 CI LENGTHS ############################################
 
@@ -647,13 +607,9 @@ gg <- ggplot(ht_comp, aes(x = HT, y = est, color = method)) +
   geom_point() + geom_abline(slope = 1) + facet_wrap(~method) 
 ggsave(plot = gg, height = 6, width = 7,
        filename = paste0("paper/figures/all_adm1_mcv_est_scatter.pdf"))
-# ggsave(plot = gg, dpi = 200, height = 6, width = 7,
-#        filename = paste0("paper/figures/all_adm1_mcv_est_scatter.tiff"))
 gg <- ggplot(ht_comp, aes(x = sqrt(HT_var), y = sqrt(var), color = method)) +
   geom_point() + geom_abline(slope = 1) + facet_wrap(~method) 
 ggsave(plot = gg, height = 6, width = 7,
        filename = paste0("paper/figures/all_adm1_mcv_se_scatter.pdf"))
-# ggsave(plot = gg, dpi = 200, height = 6, width = 7,
-#        filename = paste0("paper/figures/all_adm1_mcv_se_scatter.tiff"))
 
 
