@@ -8,9 +8,8 @@ library(INLA)
 library(survey)
 library(purrr)
 library(rgdal)
-library(geosphere)
 library(raster)
-
+library(SUMMER)
 #### FILE MANAGEMENT ####
 home_dir <- '~/'
 if (!("Dropbox" %in% list.files("~"))) {
@@ -23,9 +22,8 @@ res_dir <- "results/"
 dir.create(file.path(res_dir), showWarnings = FALSE)
 cluster_res_dir <- "results/cluster/"
 dir.create(file.path(cluster_res_dir), showWarnings = FALSE)
-sim_res_dir <- "results/cluster/sims/"
+sim_res_dir <- "results/cluster/spatial-cluster-sims/"
 dir.create(file.path(sim_res_dir), showWarnings = FALSE)
-
 #### 1 GENERATE POPULATION #####################################################
 
 #### 1.1 LOAD NIGERIA INFO #####################################################
@@ -91,7 +89,7 @@ if(exists("poly_adm2")){
 
 #### 1.2 SAMPLE EA LOCATIONS ###################################################
 
-gen_ea_locs <- function(N = 73000) {
+gen_ea_locs <- function(N = 300*73) {
   C <- 73
   pop_dat_list <- list()
   for (i in 1:37) {
@@ -163,7 +161,7 @@ simulate_bym2 <-
     out <- simulate_besag(Amat, mean = mean, 
                           marginal_var = marginal_var) %>%
       mutate(effect = sqrt(phi) * effect + 
-               sqrt(1 - phi) * rnorm(n, sd = sqrt(marginal_var)) + mean)
+               sqrt(1 - phi) * rnorm(n) + mean)
     out
   }
 
@@ -221,6 +219,7 @@ simulate_SPDE = function(locs, mesh = NULL,
 gen_pop_X <- function(ea_locs) {
   ea_locs_sf <- st_as_sf(ea_locs, coords = c("lon", "lat"))
   pop_dat <- ea_locs
+  pop_dat$l1a = log(1 + pop_dat$access)
   N <- nrow(pop_dat)
   A <- length(unique(pop_dat$admin1_name))
   
@@ -252,230 +251,251 @@ gen_pop_X <- function(ea_locs) {
     admin2_names$Internal[match(pop_dat$admin2_name, admin2_names$GADM)]
   pop_dat$stratum <- 
     paste0(pop_dat$admin1_name, "-", ifelse(pop_dat$urban, "urban", "rural"))
+  pop_dat$id_stratum <- match(pop_dat$stratum, unique(pop_dat$stratum))
+  pop_dat$id_cluster <- 1:N
+  pop_dat$cl_size <- rpois(N, 10)
   return(pop_dat)
 }
 
 #### 1.2 GENERATE X ############################################################
 
-gen_pop_Y <- function(pop_dat, eta_a_sd = .15,
-                      e_ac_sd = 1,
-                      beta = c(3, .4, -.4, .4, .15, .15, .4, .05, .05)) {
+gen_pop_Y <- function(pop_dat, eta_a_sd = .25,
+                      e_ac_sd = .25,
+                      beta = c(SUMMER::logit(.5), 1, 1, .5, .25, .25, 1.5, .1, .1)) {
   N <- nrow(pop_dat)
-  A <- length(unique(pop_dat$admin1_name))
-  pop_dat$l1a = log(1 + pop_dat$access)
   pop_X <- model.matrix(~ x1_ns + x1_ns_sig + x1_BYM2 + x2_BYM2 + 
                           x1_SPDE + x2_SPDE + l1a + poverty, pop_dat)
-  pop_dat %>%
+  pop_dat <- pop_dat %>%
     group_by(admin1_name) %>%
     mutate(eta_a = rep(rnorm(1, sd = eta_a_sd), each = n())) %>%
     ungroup() %>%
     mutate(e_ac = rnorm(N, sd = e_ac_sd),
-           y = exp(pop_X %*% beta + eta_a + e_ac))
-}
-gen_pop_Y_cts <- function(
-  pop_dat, eta_a_sd = .15,
-  e_ac_sd = .5,
-  beta = c(3, .5, -.5, .1, 1, .1, .5, .05, .05)
-  ) {
-  N <- nrow(pop_dat)
-  A <- length(unique(pop_dat$admin1_name))
-  pop_dat$l1a = log(1 + pop_dat$access)
-  pop_X <- model.matrix(~ x1_ns + x1_ns_sig + x1_BYM2 + x2_BYM2 + 
-                          x1_SPDE + x2_SPDE + l1a + poverty, pop_dat)
-  pop_dat %>%
-    group_by(admin1_name) %>%
-    mutate(eta_a = rep(rnorm(1, sd = eta_a_sd), each = n())) %>%
-    ungroup() %>%
-    mutate(e_ac = rnorm(N, sd = e_ac_sd),
-           y = pop_X %*% beta + eta_a + e_ac)
+           p = SUMMER::expit(pop_X %*% beta + eta_a + e_ac))
+  pop_dat <- pop_dat[rep(seq_len(nrow(pop_dat)), times = pop_dat$cl_size), ]
+  pop_dat$y <- rbinom(nrow(pop_dat), 1, prob = pop_dat$p)
+  return(pop_dat)
 }
 
 gen_sample_ind <- 
   function(
     pop_dat, strata,
-    prop_sample_per_strata = .02
+    n_cl_vec = 
+      rep(10, length(unique(as.vector(model.matrix(strata, pop_dat)[, 2]))))
   ) {
     strata_vec <- as.vector(model.matrix(strata, pop_dat)[, 2])
-    n_strata <- length(unique(strata_vec))
-    pop_dat$strata <- strata_vec
-    pop_dat$idx <- 1:nrow(pop_dat)
-    ns_per_area_table <- pop_dat %>%
-      group_by(strata) %>%
-      summarize(n = round(n() * prop_sample_per_strata))
-    ns_per_area <- ns_per_area_table$n
-    
+    N_S <- length(unique(strata_vec))
+    pop_dat$n_cl <- n_cl_vec[match(pop_dat$id_stratum, 1:N_S)]
     pop_dat <- pop_dat %>%
-      left_join(ns_per_area_table, by = "strata") %>%
-      group_by(strata) %>%  
-      mutate(wt = n() / n) %>%
-      ungroup()
-    
+      group_by(id_stratum) %>%
+      mutate(pop_s = sum(cl_size)) %>%
+      ungroup() %>%
+      group_by(id_stratum, n_cl, cl_size) %>%
+      mutate(pi = n_cl * cl_size / pop_s, 
+             wt = 1 / pi) %>%
+      ungroup() 
     sample_dat <- pop_dat %>%
-      group_by(strata) %>%
-      nest() %>%             
-      ungroup() %>% 
+      group_by(id_stratum, n_cl) %>%
+      nest() %>% 
       mutate(samp = 
-               map2(data, ns_per_area,
-                    function(x, y) 
-                      slice_sample(x, n = y,
-                                   weight_by = 1/x$wt))) %>%
+               map(data,
+                   function(x) 
+                     slice_sample(x, n = n_cl,
+                                  weight_by = pi, replace = F)))  %>%
       dplyr::select(-data) %>%
-      unnest(samp)
-    return(list(ind = sample_dat$idx, pop_dat = pop_dat))
+      unnest(samp) %>%
+      ungroup()
+
+    return(list(ind = sample_dat$id_cluster, pop_dat = pop_dat))
   }
 gen_sample_ind_inf <- 
   function(
     pop_dat, strata,
-    prop_sample_per_strata = .02
+    n_cl_vec = 
+      rep(10, length(unique(as.vector(model.matrix(strata, pop_dat)[, 2]))))
   ) {
     strata_vec <- as.vector(model.matrix(strata, pop_dat)[, 2])
-    n_strata <- length(unique(strata_vec))
-    pop_dat$strata <- strata_vec
-    pop_dat$idx <- 1:nrow(pop_dat)
-    ns_per_area_table <- pop_dat %>%
-      group_by(strata) %>%
-      summarize(n = round(n() * prop_sample_per_strata))
-    ns_per_area <- ns_per_area_table$n
+    N_S <- length(unique(strata_vec))
+    pop_dat$n_cl <- n_cl_vec[match(pop_dat$id_stratum, 1:N_S)]
     pop_dat <- pop_dat %>%
-      mutate(a = 1 + 1 * (x2_SPDE > median(x2_SPDE))) %>%
-      left_join(ns_per_area_table, by = "strata") %>%
-      group_by(strata) %>%  
-      mutate(wt = sum(a) / a / n) %>%
-      ungroup()
+      group_by(id_stratum) %>%
+      mutate(a = 1 + 2 * (x2_SPDE > quantile(x2_SPDE, .75)),
+             sum_a = sum(a)) %>%
+      ungroup() %>%
+      group_by(id_stratum, n_cl, cl_size) %>%
+      mutate(pi = n_cl * a / sum_a,
+             wt = 1 / pi) %>%
+      ungroup() 
     sample_dat <- pop_dat %>%
-      group_by(strata) %>%  
-      nest() %>%             
-      ungroup() %>% 
+      group_by(id_stratum, n_cl) %>%
+      nest() %>% 
       mutate(samp = 
-               map2(data, ns_per_area,
-                    function(x, y) 
-                      slice_sample(x, n = y,
-                                   weight_by = 1/x$wt))) %>%
+               map(data,
+                   function(x) 
+                     slice_sample(x, n = n_cl,
+                                  weight_by = pi, replace = F)))  %>%
       dplyr::select(-data) %>%
-      unnest(samp)
-    return(list(ind = sample_dat$idx, pop_dat = pop_dat))
+      unnest(samp) %>%
+      ungroup()
+    return(list(ind = sample_dat$id_cluster, pop_dat = pop_dat))
   }
 
 
 #### RUN SIMULATIONS ####
-run_one_sim <- function(sample_ind, pop_dat_X, pop_gen_fn, mod_fam = gaussian(),
-                        f = function(x) x,
-                        i, ...) {
-  pop_dat <- pop_gen_fn(pop_dat_X, ...) %>%
-    mutate(region = as.character(admin1_char)) %>%
-    mutate(z = f(y))
-  sample_dat <- pop_dat[sample_ind, ]
-  pop_means <- pop_dat %>%
+run_one_sim <- function(sample_ind, pop_dat_X, pop_gen_fn,mod_fam = quasibinomial(), i, clust_mods = F, ...) {
+  pop_dat_Y <- pop_gen_fn(pop_dat_X, ...)
+  #pop_dat_Y <- gen_pop_Y(pop_dat)
+  pop_dat_Y <- pop_dat_Y %>%
+    mutate(region = as.character(admin1_char))
+  sample_dat <- pop_dat_Y[pop_dat_Y$id_cluster %in% sample_ind, ]
+
+  pop_means <- pop_dat_Y %>%
     group_by(region) %>%
-    summarize(pop_mean = mean(z)) %>%
-    as.data.frame()
+    summarize(pop_mean = mean(y)) %>%
+    as.data.frame() %>%
+    arrange(match(region, rownames(admin1_mat)))
   sample_dat$id <- 1:nrow(sample_dat)
-  sample_des <- svydesign(ids = ~id, strata = ~region,
+  sample_des <- svydesign(ids = ~id_cluster, strata = ~id_stratum,
                           weights = ~wt, data = sample_dat)
-  direct_est <- get_direct(~z, ~region, sample_des)
-  #iid_sdir_logit_est <- get_iid_sdir_logit(direct_est)
-  iid_sdir_est <- get_iid_sdir(direct_est)
-  #bym_sdir_logit_est <- get_bym2_sdir_logit(direct_est, admin1_mat)
-  bym_sdir_est <- get_bym2_sdir(direct_est, admin1_mat)
-  working_fit <- svyglm(z ~ x1_ns + x1_ns_sig + x2_BYM2 + 
+  
+  direct_est <- get_direct(~y, ~region, sample_des) %>%
+    arrange(match(region, rownames(admin1_mat)))
+  iid_sdir_logit_est <- get_iid_sdir_logit(direct_est) %>%
+    arrange(match(region, rownames(admin1_mat)))
+  bym_sdir_logit_est <- get_bym2_sdir_logit(direct_est, admin1_mat) %>%
+    arrange(match(region, rownames(admin1_mat)))
+  
+  working_fit <- svyglm(y ~ x1_ns + x1_ns_sig + x2_BYM2 + 
                           x1_SPDE + l1a + poverty,
                         sample_des, family = mod_fam)
-  greg_est <- get_greg(working_fit, z ~ x1_ns + x1_ns_sig + x2_BYM2 + 
+  greg_est <- get_greg(working_fit, y ~ x1_ns + x1_ns_sig + x2_BYM2 + 
                          x1_SPDE + l1a + poverty,
-                       ~region, pop_dat, sample_des)
-  #iid_sgreg_logit_est <- get_iid_sdir_logit(greg_est)
-  iid_sgreg_est <- get_iid_sdir(greg_est)
-  #bym_sgreg_logit_est <- get_bym2_sdir_logit(greg_est, admin1_mat)
-  bym_sgreg_est <- get_bym2_sdir(greg_est, admin1_mat)
+                       ~region, pop_dat_Y, sample_des) %>%
+    arrange(match(region, rownames(admin1_mat)))
+  iid_sgreg_logit_est <- get_iid_sdir_logit(greg_est) %>%
+    arrange(match(region, rownames(admin1_mat)))
+  bym_sgreg_logit_est <- get_bym2_sdir_logit(greg_est, admin1_mat) %>%
+    arrange(match(region, rownames(admin1_mat)))
   
-  working_full_fit <- svyglm(z ~ x1_ns + x1_ns_sig  + x2_BYM2 + 
+  working_full_fit <- svyglm(y ~ x1_ns + x1_ns_sig  + x2_BYM2 + 
                                x1_SPDE + x2_SPDE + l1a + poverty, 
                              sample_des, family = mod_fam)
   greg_full_est <- get_greg(working_full_fit, 
-                            z ~ x1_ns + x1_ns_sig  + x2_BYM2 + 
+                            y ~ x1_ns + x1_ns_sig  + x2_BYM2 + 
                               x1_SPDE + x2_SPDE + l1a + poverty,
-                            ~region, pop_dat, sample_des) %>%
+                            ~region, pop_dat_Y, sample_des) %>%
     mutate(method = "GREGFull")
-  # iid_sgreg_full_logit_est <- get_iid_sdir_logit(greg_full_est) %>%
-  #  mutate(method = "iidSLogitGREGFull")
-  iid_sgreg_full_est <- get_iid_sdir(greg_full_est) %>%
-    mutate(method = "iidSGREGFull")
-  #bym_sgreg_full_logit_est <- 
-  #  get_bym2_sdir_logit(greg_full_est, admin1_mat) %>%
-  #  mutate(method = "bymSLogitGREGFull")
-  bym_sgreg_full_est <- 
-    get_bym2_sdir(greg_full_est, admin1_mat) %>%
-    mutate(method = "bymSGREGFull")
-  
-  iid_y_ulm_est <-
-    get_iid_gau_ulm(
-      formula = z ~ x1_ns + x1_ns_sig + 
-        x2_BYM2 + x1_SPDE + l1a + poverty, 
-      by = ~region, pop_dat = pop_dat, 
-      sample_dat = sample_dat, h = function(x) x)
-  # iid_z_ulm_est <- get_iid_bin_ulm(
-  #   formula = z ~ x1_ns + x1_ns_sig + 
-  #     x2_BYM2 + x1_SPDE + l1a + poverty,
-  #   by = ~region, pop_dat = pop_dat, sample_dat = sample_dat)
-  bym_y_ulm_est <- get_bym_gau_ulm(
-    formula = z ~ x1_ns + x1_ns_sig +  
-      x2_BYM2 + x1_SPDE + l1a + poverty, 
-    by = ~region, adj_mat = admin1_mat, pop_dat = pop_dat, 
-    sample_dat = sample_dat, h = function(x) x)
-  # bym_z_ulm_est <- get_bym_bin_ulm(
-  #   formula = z ~ x1_ns + x1_ns_sig +
-  #     x2_BYM2 + x1_SPDE + l1a + poverty,
-  #   by = ~region, adj_mat = admin1_mat,
-  #   pop_dat = pop_dat, sample_dat = sample_dat)
-  # 
-  iid_y_full_ulm_est <-
-    get_iid_gau_ulm(
-      formula = z ~ x1_ns + x1_ns_sig +
-        x2_BYM2 + x1_SPDE + x2_SPDE + l1a + poverty,
-      by = ~region, pop_dat = pop_dat,
-      sample_dat = sample_dat, h = function(x) x) %>%
-    mutate(method = "iidGauFullULM")
-  # iid_z_full_ulm_est <- get_iid_bin_ulm(
-  #   formula = z ~ x1_ns + x1_ns_sig + x1_BYM2 +
-  #     x2_BYM2 + x1_SPDE + x2_SPDE + l1a + poverty,
-  #   by = ~region, pop_dat = pop_dat, sample_dat = sample_dat) %>%
-  #   mutate(method = "iidBinFullULM")
-  bym_y_full_ulm_est <- get_bym_gau_ulm(
-    formula = z ~ x1_ns + x1_ns_sig +
-      x2_BYM2 + x1_SPDE + x2_SPDE + l1a + poverty, 
-    by = ~region, adj_mat = admin1_mat, pop_dat = pop_dat, 
-    sample_dat = sample_dat, h = function(x) x) %>%
-    mutate(method = "bymGauFullULM")
-  # bym_z_full_ulm_est <- get_bym_bin_ulm(
-  #   formula = z ~ x1_ns + x1_ns_sig + x1_BYM2 +
-  #     x2_BYM2 + x1_SPDE + x2_SPDE + l1a + poverty,
-  #   by = ~region, adj_mat = admin1_mat,
-  #   pop_dat = pop_dat, sample_dat = sample_dat) %>%
-  #   mutate(method = "bymBinFullULM")
+  iid_sgreg_full_logit_est <- get_iid_sdir_logit(greg_full_est) %>%
+    mutate(method = "iidSLogitGREGFull") %>%
+    arrange(match(region, rownames(admin1_mat)))
+  bym_sgreg_full_logit_est <-
+    get_bym2_sdir_logit(greg_full_est, admin1_mat) %>%
+    mutate(method = "bymSLogitGREGFull") %>%
+    arrange(match(region, rownames(admin1_mat)))
+  iid_y_ulm_est <- get_iid_bin_ulm(
+    formula = y ~ x1_ns + x1_ns_sig +
+      x2_BYM2 + x1_SPDE + l1a + poverty,
+    by = ~region, pop_dat = pop_dat_Y, sample_dat = sample_dat)
+  bym_y_ulm_est <- get_bym_bin_ulm(
+    formula = y ~ x1_ns + x1_ns_sig +
+      x2_BYM2 + x1_SPDE + l1a + poverty,
+    by = ~region, adj_mat = admin1_mat,
+    pop_dat = pop_dat_Y, sample_dat = sample_dat)
+  iid_y_full_ulm_est <- get_iid_bin_ulm(
+    formula = y ~ x1_ns + x1_ns_sig +
+      x2_BYM2 + x1_SPDE + x2_SPDE + l1a + poverty,
+    by = ~region, pop_dat = pop_dat_Y, sample_dat = sample_dat) %>%
+    mutate(method = "iidBinFullULM")
+  bym_y_full_ulm_est <- get_bym_bin_ulm(
+    formula = y ~ x1_ns + x1_ns_sig  +
+      x2_BYM2 + x1_SPDE + x2_SPDE + l1a + poverty,
+    by = ~region, adj_mat = admin1_mat,
+    pop_dat = pop_dat_Y, sample_dat = sample_dat) %>%
+    mutate(method = "bymBinFullULM")
+
 
   res <- bind_rows(direct_est, 
-                   iid_sdir_est, 
-                   #iid_sdir_logit_est, 
-                   bym_sdir_est, 
-                   #bym_sdir_logit_est, 
+                   iid_sdir_logit_est, 
+                   bym_sdir_logit_est, 
                    greg_est,
-                   iid_sgreg_est,
-                   #iid_sgreg_logit_est,
-                   bym_sgreg_est,
-                   #bym_sgreg_logit_est,
+                   iid_sgreg_logit_est,
+                   bym_sgreg_logit_est,
                    greg_full_est,
-                   iid_sgreg_full_est,
-                   #iid_sgreg_full_logit_est,
-                   bym_sgreg_full_est,
-                   #bym_sgreg_full_logit_est,
+                   iid_sgreg_full_logit_est,
+                   bym_sgreg_full_logit_est,
                    iid_y_ulm_est,
-                   #iid_z_ulm_est,
                    iid_y_full_ulm_est,
-                   #iid_z_full_ulm_est,
                    bym_y_ulm_est,
-                   #bym_z_ulm_est,
-                   #bym_z_full_ulm_est,
                    bym_y_full_ulm_est)
+  if (clust_mods) {
+    sample_cluster_dat <- sample_dat %>%
+      group_by(id_cluster, 
+               region,
+               x1_ns, x1_ns_sig,
+               x1_BYM2, x2_BYM2, 
+               x1_SPDE, x2_SPDE,
+               l1a, poverty) %>%
+      summarize(y = sum(y),
+                n_trials = n()) %>%
+      ungroup()
+    iid_y_bbulm_est <- get_iid_bbin_ulm(
+      formula = y ~ x1_ns + x1_ns_sig +
+        x2_BYM2 + x1_SPDE + l1a + poverty,
+      by = ~region, pop_dat = pop_dat_Y,
+      sample_dat = sample_cluster_dat,
+      Ntrials = sample_cluster_dat$n_trials)
+    bym_y_bbulm_est <- get_bym_bbin_ulm(
+      formula = y ~ x1_ns + x1_ns_sig +
+        x2_BYM2 + x1_SPDE + l1a + poverty,
+      by = ~region, adj_mat = admin1_mat,
+      pop_dat = pop_dat_Y, 
+      sample_dat = sample_cluster_dat,
+      Ntrials = sample_cluster_dat$n_trials)
+    iid_y_full_bbulm_est <- get_iid_bbin_ulm(
+      formula = y ~ x1_ns + x1_ns_sig +
+        x2_BYM2 + x1_SPDE + x2_SPDE + l1a + poverty,
+      by = ~region, pop_dat = pop_dat_Y, 
+      sample_dat = sample_cluster_dat,
+      Ntrials = sample_cluster_dat$n_trials) %>%
+      mutate(method = "iidBBinFullULM")
+    bym_y_full_bbulm_est <- get_bym_bbin_ulm(
+      formula = y ~ x1_ns + x1_ns_sig  +
+        x2_BYM2 + x1_SPDE + x2_SPDE + l1a + poverty,
+      by = ~region, adj_mat = admin1_mat,
+      pop_dat = pop_dat_Y, sample_dat = sample_cluster_dat,
+      Ntrials = sample_cluster_dat$n_trials) %>%
+      mutate(method = "bymBBinFullULM")
+    iid_y_lnulm_est <- get_iid_lnbin_ulm(
+      formula = y ~ x1_ns + x1_ns_sig +
+        x2_BYM2 + x1_SPDE + l1a + poverty,
+      by = ~region, pop_dat = pop_dat_Y, sample_dat = sample_dat)
+    bym_y_lnulm_est <- get_bym_lnbin_ulm(
+      formula = y ~ x1_ns + x1_ns_sig +
+        x2_BYM2 + x1_SPDE + l1a + poverty,
+      by = ~region, adj_mat = admin1_mat,
+      pop_dat = pop_dat_Y, sample_dat = sample_dat)
+    iid_y_full_lnulm_est <- get_iid_lnbin_ulm(
+      formula = y ~ x1_ns + x1_ns_sig +
+        x2_BYM2 + x1_SPDE + x2_SPDE + l1a + poverty,
+      by = ~region, pop_dat = pop_dat_Y, sample_dat = sample_dat) %>%
+      mutate(method = "iidLNBinFullULM")
+    bym_y_full_lnulm_est <- get_bym_lnbin_ulm(
+      formula = y ~ x1_ns + x1_ns_sig  +
+        x2_BYM2 + x1_SPDE + x2_SPDE + l1a + poverty,
+      by = ~region, adj_mat = admin1_mat,
+      pop_dat = pop_dat_Y, sample_dat = sample_dat) %>%
+      mutate(method = "bymLNBinFullULM")
+    res <- bind_rows(
+      res,
+      iid_y_bbulm_est,
+      bym_y_bbulm_est,
+      iid_y_full_bbulm_est,
+      bym_y_full_bbulm_est,
+      iid_y_lnulm_est,
+      bym_y_lnulm_est,
+      iid_y_full_lnulm_est,
+      bym_y_full_lnulm_est
+    )
+  }
   res$id_sim = i
   res <- left_join(res, pop_means, by = "region")
   return(res)
@@ -491,35 +511,39 @@ if (!file.exists(paste0(sim_res_dir, "spatial_pop_dat.rds"))) {
   pop_dat <- readRDS(paste0(sim_res_dir, "spatial_pop_dat.rds"))
 }
 set.seed(1201)
-sample_ind_res <- gen_sample_ind(pop_dat, ~stratum, .02)
-inf_sample_ind_res <- gen_sample_ind_inf(pop_dat, ~stratum, .02)
+sample_ind_res <-
+  gen_sample_ind(pop_dat, ~id_stratum, rep(10, length(unique(pop_dat$stratum))))
+inf_sample_ind_res <-
+  gen_sample_ind_inf(pop_dat,~id_stratum, rep(10, length(unique(pop_dat$stratum))))
 sample_ind <- sample_ind_res$ind
 pop_dat <- sample_ind_res$pop_dat
 inf_sample_ind <- inf_sample_ind_res$ind
 inf_pop_dat <- inf_sample_ind_res$pop_dat
 
-# t <- Sys.time()
-# temp <- run_one_sim(sample_ind,  pop_dat, gen_pop_Y, 1)
-# Sys.time() - t
-
-# t <- Sys.time()
-# temp2 <- run_one_sim(inf_sample_ind, inf_pop_dat, gen_pop_Y_cts, i = 1)
-# Sys.time() - t
 args = commandArgs(TRUE)
 # supplied at the command line
 k = as.numeric(args[1])
-set.seed(k)
-res <- do.call(
-  rbind,
-  lapply(1:10, function(i) run_one_sim(sample_ind,  pop_dat, 
-                                      gen_pop_Y_cts, i = i + (k - 1) * 10))
-  )
-saveRDS(res, paste0(sim_res_dir, "CMN-cts-spatial-model_res_", k, ".rds"))
+clust_mods = as.numeric(args[2]) == 1
+res_name <- ifelse(clust_mods, "FULL", "SUB")
+
 k = as.numeric(args[1])
-set.seed(k)
-res <- do.call(
-  rbind,
-  lapply(1:10, function(i) run_one_sim(inf_sample_ind,  inf_pop_dat, 
-                                       gen_pop_Y_cts, i = i + (k - 1) * 10))
-)
-saveRDS(res, paste0(sim_res_dir, "CMN-cts-spatial-model-inf-smp_res_", k, ".rds"))
+if (!file.exists(paste0(sim_res_dir,  res_name,"-bin-spatial-model-inf-smp_res_", k, ".rds"))) {
+  set.seed(k)
+  res <- do.call(
+    rbind,
+    lapply(1:1, function(i) run_one_sim(inf_sample_ind,  inf_pop_dat, 
+                                        gen_pop_Y, i = i + (k - 1) * 10,
+                                        clust_mods = clust_mods))
+  )
+  saveRDS(res, paste0(sim_res_dir,  res_name,"-bin-spatial-model-inf-smp_res_", k, ".rds"))
+}
+if (!file.exists(paste0(sim_res_dir, res_name, "-bin-spatial-model_res_", k, ".rds"))) {
+  set.seed(k)
+  res <- do.call(
+    rbind,
+    lapply(1:1, function(i) run_one_sim(sample_ind,  pop_dat, 
+                                        gen_pop_Y, i = i + (k - 1) * 10,
+                                        clust_mods = clust_mods))
+  )
+  saveRDS(res, paste0(sim_res_dir, res_name, "-bin-spatial-model_res_", k, ".rds"))
+}
