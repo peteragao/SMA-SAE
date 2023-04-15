@@ -287,23 +287,17 @@ gen_sample_ind <-
     pop_dat$n_cl <- n_cl_vec[match(pop_dat$id_stratum, 1:N_S)]
     pop_dat <- pop_dat %>%
       group_by(id_stratum) %>%
-      mutate(pop_s = sum(cl_size)) %>%
-      ungroup() %>%
-      group_by(id_stratum, n_cl, cl_size) %>%
-      mutate(pi = n_cl * cl_size / pop_s, 
+      mutate(pop_s = sum(cl_size),
+             pi = inclusionprobabilities(1 + cl_size, n_cl), 
              wt = 1 / pi) %>%
       ungroup() 
+    
     sample_dat <- pop_dat %>%
-      group_by(id_stratum, n_cl) %>%
-      nest() %>% 
-      mutate(samp = 
-               map(data,
-                   function(x) 
-                     slice_sample(x, n = n_cl,
-                                  weight_by = pi, replace = F)))  %>%
-      dplyr::select(-data) %>%
-      unnest(samp) %>%
-      ungroup()
+      group_by(id_stratum) %>%
+      mutate(samp_ind = UPmaxentropy(pi)) %>%
+      filter(samp_ind == 1) %>%
+      ungroup() %>%
+      dplyr::select(-samp_ind)
 
     return(list(ind = sample_dat$id_cluster, pop_dat = pop_dat))
   }
@@ -316,26 +310,23 @@ gen_sample_ind_inf <-
     strata_vec <- as.vector(model.matrix(strata, pop_dat)[, 2])
     N_S <- length(unique(strata_vec))
     pop_dat$n_cl <- n_cl_vec[match(pop_dat$id_stratum, 1:N_S)]
+    
     pop_dat <- pop_dat %>%
       group_by(id_stratum) %>%
       mutate(a = 1 + 2 * (x2_SPDE > quantile(x2_SPDE, .75)),
              sum_a = sum(a)) %>%
       ungroup() %>%
-      group_by(id_stratum, n_cl, cl_size) %>%
-      mutate(pi = n_cl * a / sum_a,
+      group_by(id_stratum) %>%
+      mutate(pi = inclusionprobabilities(a, n_cl), 
              wt = 1 / pi) %>%
       ungroup() 
+    
     sample_dat <- pop_dat %>%
-      group_by(id_stratum, n_cl) %>%
-      nest() %>% 
-      mutate(samp = 
-               map(data,
-                   function(x) 
-                     slice_sample(x, n = n_cl,
-                                  weight_by = pi, replace = F)))  %>%
-      dplyr::select(-data) %>%
-      unnest(samp) %>%
-      ungroup()
+      group_by(id_stratum) %>%
+      mutate(samp_ind = UPmaxentropy(pi)) %>%
+      filter(samp_ind == 1) %>%
+      ungroup() %>%
+      dplyr::select(-samp_ind)
     return(list(ind = sample_dat$id_cluster, pop_dat = pop_dat))
   }
 

@@ -462,7 +462,7 @@ nga_map <- ggplot(data = st_as_sf(poly_adm2)) +
                mutate(urban = as.factor(ifelse(urban == "U", "Urban", "Rural"))),
              aes(x = lon, y = lat, color = urban),
              shape = 3, alpha = 1, size = .55) +
-  scale_color_manual(values = c("mediumblue", "gold"), name = NULL) + 
+  scale_color_manual(values = c("mediumblue", "tomato"), name = NULL) + 
   guides(colour = guide_legend(override.aes = list(size = 4, stroke = 2))) +
   theme_bw() + guides(fill="none") +
   theme(legend.position="bottom",
